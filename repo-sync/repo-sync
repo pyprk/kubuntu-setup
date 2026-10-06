@@ -55,6 +55,17 @@ sync_repo() {
 
     local branch
     branch=$(git symbolic-ref -q --short HEAD) || return
+
+    # pick up commits made elsewhere (another machine, GitHub, Claude)
+    if git fetch -q origin "$branch" 2>>"$LOG" && [ -n "$(git rev-list -n1 HEAD..FETCH_HEAD 2>/dev/null)" ]; then
+        if git pull -q --rebase --autostash origin "$branch" 2>>"$LOG"; then
+            log "$name: pulled remote changes"
+        else
+            warn "$name: pull failed, see $LOG"
+            return
+        fi
+    fi
+
     if git push -q -u origin "$branch" 2>>"$LOG"; then
         return
     fi

@@ -1,0 +1,32 @@
+#!/bin/bash
+# Clones every repo on the logged-in GitHub account into /mnt/data/repos.
+# Repos that are already there are left alone (repo-sync keeps them current).
+# Usage: repo-clone-all [--archived]   (archived repos are skipped by default)
+set -u
+ROOT=${REPO_SYNC_ROOT:-/mnt/data/repos}
+mkdir -p "$ROOT"
+
+command -v gh >/dev/null || { echo "gh is not installed (sudo apt install gh && gh auth login)"; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "gh is not logged in (gh auth login)"; exit 1; }
+
+filter='.[] | select(.isArchived | not)'
+[ "${1:-}" = "--archived" ] && filter='.[]'
+
+cloned=0 skipped=0 failed=0
+while IFS=$'\t' read -r name url; do
+    [ -n "$name" ] || continue
+    if [ -e "$ROOT/$name" ]; then
+        skipped=$((skipped + 1))
+        continue
+    fi
+    if gh repo clone "$url" "$ROOT/$name" -- -q; then
+        echo "cloned   $name"
+        cloned=$((cloned + 1))
+    else
+        echo "FAILED   $name"
+        failed=$((failed + 1))
+    fi
+done < <(gh repo list --limit 500 --json name,url,isArchived --jq "$filter | [.name, .url] | @tsv")
+
+echo "done: $cloned cloned, $skipped already present, $failed failed"
+[ "$failed" -eq 0 ]
