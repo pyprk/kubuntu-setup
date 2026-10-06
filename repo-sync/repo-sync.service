@@ -1,0 +1,8 @@
+[Unit]
+Description=Commit and push repos under /mnt/data/repos to GitHub
+ConditionPathIsDirectory=/mnt/data/repos
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/repo-sync
+Nice=10
