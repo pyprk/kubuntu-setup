@@ -243,9 +243,10 @@ Wi-Fi misbehaves in any other way, use the cable and come back to it.
 - `scripts/setup-data-drive.sh` is for coyote's second NVMe (the disk id is
   hard-coded). If this box gets a second drive in its other M.2 slot, change
   the id and it works the same way.
-- The apps script was written for a laptop used as a desktop: it masks
-  suspend and writes a lid-switch drop-in. Harmless here, but if the desktop
-  should be able to suspend:
+- The apps script used to mask suspend on every machine (it was written for
+  a lid-closed laptop). Since 2026-10-10 it checks the chassis and leaves a
+  desktop alone, but the netboot entry runs whatever copy tower had when
+  `netboot-sync-isos.sh` last ran. If this box ends up unable to suspend:
   `sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
 - The "+ homelab setup" netboot entry carries the copy of homelab-setup that
   was on tower when `netboot-sync-isos.sh` last ran, not the GitHub copy. Edits
