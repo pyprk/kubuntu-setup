@@ -20,8 +20,13 @@ and `lspci -nn | grep -iE 'network|ethernet|non-volatile'`.
 
 ## Before it arrives
 
-**ISO.** Kubuntu 26.04.1: Plasma 6.6, Linux 7.0, Wayland only (the X11 session
-is not installed and not supported by the Kubuntu team).
+**Install medium.** Tower's netboot menu already serves Kubuntu 26.04, with a
+"+ homelab setup" variant that runs the apps script on first boot, so the PXE
+route needs nothing prepared. The USB stick below is the backup. Either way it
+is Kubuntu 26.04: Plasma 6.6, Linux 7.0, Wayland only (the X11 session is not
+installed and not supported by the Kubuntu team).
+
+**ISO** for the stick, 26.04.1:
 
     cd ~/Downloads
     wget https://cdimage.ubuntu.com/kubuntu/releases/26.04/release/kubuntu-26.04.1-desktop-amd64.iso
@@ -47,9 +52,11 @@ and whatever else in `~` matters.
   reinstall from a Microsoft USB activates on its own. Dual boot is covered in
   the install step if you keep it.
 - The hostname.
-- Secure Boot stays on. Ubuntu's kernel and NVIDIA modules are signed; if the
-  DKMS half of the driver asks for a MOK password, that is a one-time
-  enrollment (step 5).
+- Secure Boot: off, at least for the install. The PXE route needs it off
+  (netboot.xyz's iPXE is not signed), and leaving it off afterwards also skips
+  the MOK step in step 5. The USB route works either way; with it on, Ubuntu's
+  signed kernel and NVIDIA modules cover it and the DKMS half of the driver
+  asks for a one-time MOK password.
 
 **Bring.** The monitor cable, for the *graphics card*. An Ethernet cable
 (takes Wi-Fi out of the install). A USB keyboard and mouse.
@@ -73,18 +80,35 @@ you what is in it.
 
 ### 2. BIOS (Del while the logo shows)
 
-- UEFI boot, CSM off. Secure Boot on. Fast Boot off, so the boot menu and a
-  USB keyboard work.
+- UEFI boot, CSM off. Secure Boot off (see above). Fast Boot off, so the boot
+  menu and a USB keyboard work.
 - Memory: if it shows 4800, enable the EXPO profile. The 8700F's rated speed
   is 5200 and EXPO 6000 is what everyone runs; if it ever fails to POST, drop
   to 5600.
 - "Above 4G Decoding" and "Resizable BAR": on.
 - The boot menu key depends on the board (F11 ASRock and MSI, F12 Gigabyte,
-  F8 ASUS). Pick the UEFI entry for the stick.
+  F8 ASUS). Pick the UEFI network boot entry (IPv4) for PXE, or the UEFI entry
+  for the stick. No network entry means "Network Stack" or "PXE boot" is off
+  in the BIOS; turn it on.
 
 ### 3. Install
 
-Calamares, on the wire. Normal installation. If it offers third-party or
+**PXE (preferred).** On the wire. Network boot → netboot.xyz main menu →
+**Custom URL Menu** (near the bottom; the built-in Linux menus stop at 25.x) →
+**kubuntu 26.04 desktop amd64 + homelab setup**. The ISO loads into RAM over
+HTTP, then it is the normal Kubuntu installer. The "+ homelab setup" part
+makes the first boot run homelab-setup's `initialconfig-workstation.sh`
+unattended before the login screen: base packages, Docker, Tailscale,
+Syncthing, VS Code, Chrome, Slack, Claude Desktop and Code, Go, Node, Prism,
+SSH. About 20 to 30 minutes with progress on screen, then it reboots once
+more. It was verified in QEMU on 2026-10-09 but has not yet installed a real
+machine; if the login screen comes up straight away, the hook did not take,
+and `bootstrap.sh --apps` in step 6 runs the script instead.
+
+**USB (backup).** The same installer from the stick; the apps script then
+comes from `bootstrap.sh --apps` in step 6.
+
+Either way: Calamares, normal installation. If it offers third-party or
 proprietary drivers, leave that off: the right NVIDIA flavour comes in step 5,
 and the open-source `nouveau` driver carries the display until then.
 
@@ -101,14 +125,19 @@ Keeping Windows: make the same three in the unallocated space, except the
 first. *Use the existing EFI partition*, mounted at `/boot/efi`, **not**
 formatted.
 
-Username `ryan` (the scripts assume it). Hostname: the one you picked.
+Username `ryan` (the scripts assume it, and the netboot hook writes it into
+the first-boot service). Hostname: the one you picked.
 
 ### 4. First boot
+
+On the PXE route the first boot is the apps script and a reboot; the login
+screen is the second boot. Then, on both routes:
 
     sudo apt update && sudo apt full-upgrade -y && sudo reboot
 
 The ISO carries kernel 7.0.0-30, the archive is at 7.0.0-38, and the signed
 NVIDIA modules are built per kernel, so be on the current one before step 5.
+The apps script already upgraded, so on the PXE route this is quick.
 
 The installer writes the `/mnt/data` line into `/etc/fstab` with plain
 `defaults`. Make it `defaults,noatime,nofail` like coyote, then
@@ -130,10 +159,10 @@ What is going on, so the choices make sense:
   kernels) give a black screen at boot. Ubuntu's packaged 580 has carried a
   7.0 compat patch since February, so the archive package is the one to use.
   **No `.run` installer, no PPA.**
-- Ubuntu ships pre-built modules signed by Canonical
-  (`linux-modules-nvidia-580-open-generic`), which is why Secure Boot can
-  stay on. The metapackage also pulls in DKMS, and DKMS under Secure Boot
-  asks for a MOK password once.
+- With Secure Boot off (the PXE route) there is nothing more to it. With it
+  on, Ubuntu's pre-built modules signed by Canonical
+  (`linux-modules-nvidia-580-open-generic`) cover the kernel side, and the
+  DKMS half the metapackage pulls in asks for a MOK password once.
 
 `bootstrap.sh` does this; by hand it is:
 
@@ -141,8 +170,8 @@ What is going on, so the choices make sense:
     sudo ubuntu-drivers install nvidia:580-open
     sudo reboot
 
-If a blue "Configuring Secure Boot" screen asks for a password during the
-install, choose one (8+ characters). At the reboot a "MOK management" screen
+Secure Boot on only: if a blue "Configuring Secure Boot" screen asks for a
+password during the install, choose one (8+ characters). At the reboot a "MOK management" screen
 comes up: Enroll MOK → Continue → Yes → that password → Reboot. Once.
 
 After the reboot:
@@ -165,14 +194,18 @@ so keep the stick.
     gh auth login                       # GitHub.com, HTTPS, log in with a browser
     sudo mkdir -p /mnt/data/repos && sudo chown -R ryan: /mnt/data
     gh repo clone pyprk/kubuntu-setup /mnt/data/repos/kubuntu-setup
-    /mnt/data/repos/kubuntu-setup/scripts/bootstrap.sh --hostname NAME --gaming
+    /mnt/data/repos/kubuntu-setup/scripts/bootstrap.sh --hostname NAME --gaming   # add --apps after a USB install
     sudo tailscale up --ssh
+    sudo bash /mnt/data/repos/homelab-setup/scripts/mount-network.sh   # if bootstrap skipped it because Tailscale was not up yet
     sudo reboot
 
 `bootstrap.sh` (see the README) installs the packages, the NVIDIA driver,
-Tailscale, Flatpak with Prism Launcher, repo-sync, clones every repo and runs
-the glacier-theme installers. `--gaming` adds Steam with the 32-bit NVIDIA
-libraries, gamemode and mangohud. Drop `servers.json` into `~/.config/glacier/`
+Tailscale, Flatpak with Prism Launcher, repo-sync, clones every repo, mounts
+the Tower shares with homelab-setup's `mount-network.sh` (asks for the SMB
+password once; needs Tailscale up, otherwise it is skipped with a note) and
+runs the glacier-theme installers. `--gaming` adds Steam with the 32-bit
+NVIDIA libraries, gamemode and mangohud. `--apps` runs homelab-setup's apps
+script, for a USB install. Drop `servers.json` into `~/.config/glacier/`
 whenever; `install.sh` only puts the example there if nothing is.
 
 ### 7. Check
@@ -181,6 +214,8 @@ whenever; `install.sh` only puts the example there if nothing is.
     lspci -nnk | grep -A3 -iE 'network|ethernet'   # which Wi-Fi chip, and a "Kernel driver in use"
     sensors                                        # k10temp for the CPU; the HUD widget reads this
     tailscale status
+    ls /mnt/tower/data                             # Tower shares (automount: the first access connects)
+    tail -5 /var/log/homelab-setup.log             # the first-boot apps run (PXE route)
     systemctl --user list-timers repo-sync.timer
     ls /mnt/data/repos
 
@@ -208,6 +243,13 @@ Wi-Fi misbehaves in any other way, use the cable and come back to it.
 - `scripts/setup-data-drive.sh` is for coyote's second NVMe (the disk id is
   hard-coded). If this box gets a second drive in its other M.2 slot, change
   the id and it works the same way.
+- The apps script was written for a laptop used as a desktop: it masks
+  suspend and writes a lid-switch drop-in. Harmless here, but if the desktop
+  should be able to suspend:
+  `sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
+- The "+ homelab setup" netboot entry carries the copy of homelab-setup that
+  was on tower when `netboot-sync-isos.sh` last ran, not the GitHub copy. Edits
+  made on GitHub reach tower by a pull (that repo's README, "Version control").
 - Warranty is one year through the Amazon "Manufacturer", EverBright
   Electronics Inc. Keep the box a month.
 
@@ -224,4 +266,5 @@ Wi-Fi misbehaves in any other way, use the cable and come back to it.
 - [Kubuntu forum: nvidia-settings gamma under Wayland](https://www.kubuntuforums.net/forum/newbie-support/help-the-new-guy/693755-moving-from-opensuse-leap-to-kubuntu-and-to-wayland)
 - [MT7925 and pcie_aspm.policy=powersupersave](https://community.frame.work/t/framework-13-amd-ryzen-ai-300-mt7925-wifi-disappears-with-pcie-aspm-policy-powersupersave-survives-reboot-only-cleared-by-a-full-power-off/83690)
 - [RTL8922AE on kernel 7.0](https://universal-blue.discourse.group/t/gigabyte-x870m-aorus-elite-wifi7-rtl8922ae-wi-fi-broken-on-bazzite-44-kernel-7-0-due-to-mac80211-api-changes/12250) (a third-party kernel build, not Ubuntu's)
+- `homelab-setup` (tower's `/mnt/user/data/scripts/homelab-setup`, mirrored to GitHub): `docs/netboot-local-isos.md` for how the PXE entries and the first-boot hook work
 - [KOTIN product page](https://kotin.com/products/8700f-5060ti-32g-650w-d32b) and [a listing naming the B850M board](https://www.gamertargets.com/2026/07/kotin-ryzen-7-8700frtx-5060-ti-8gb.html)

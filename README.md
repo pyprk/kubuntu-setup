@@ -19,10 +19,22 @@ fresh install.
 
 `scripts/bootstrap.sh` installs the packages below, the NVIDIA driver when
 there is an NVIDIA card (Ubuntu's `580-open` branch), Tailscale, Flatpak with
-Prism Launcher, repo-sync, then clones every repo and runs the glacier-theme
-installers. `--gaming` adds Steam, gamemode and mangohud. It is safe to rerun;
-`--dry-run` shows what it would do. What is left to do by hand afterwards:
-`sudo tailscale up --ssh`, a reboot, and `servers.json` for the HUD.
+Prism Launcher, repo-sync, then clones every repo, mounts the Tower shares and
+runs the glacier-theme installers. `--gaming` adds Steam, gamemode and
+mangohud. It is safe to rerun; `--dry-run` shows what it would do. What is
+left to do by hand afterwards: `sudo tailscale up --ssh`, a reboot, and
+`servers.json` for the HUD.
+
+The apps layer is the other repo, `homelab-setup` (tower's
+`/mnt/user/data/scripts/homelab-setup`, mirrored on GitHub): its
+`initialconfig-workstation.sh` does the base packages, Docker, Tailscale,
+Syncthing, VS Code, Chrome, Slack, Claude Desktop and Code, dev runtimes and
+SSH, and its `mount-network.sh` sets up the `/mnt/tower/*` automounts. It also
+holds tower's netboot menu. Installing from the "+ homelab setup" PXE entry
+runs the apps script on the first boot; from a USB stick, `bootstrap.sh --apps`
+runs it. `bootstrap.sh` runs `mount-network.sh` either way (once Tailscale is
+up). Docker comes from that script when it has run, else `bootstrap.sh`
+installs `docker.io`.
 
 ## Drives (coyote)
 
