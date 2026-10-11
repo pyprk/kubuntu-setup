@@ -97,16 +97,18 @@ you what is in it.
 **Custom URL Menu** (near the bottom; the built-in Linux menus stop at 25.x) →
 **kubuntu 26.04 desktop amd64 + homelab setup**. The ISO loads into RAM over
 HTTP, then it is the normal Kubuntu installer. The "+ homelab setup" part
-makes the first boot run homelab-setup's `initialconfig-workstation.sh`
-unattended before the login screen: base packages, Docker, Tailscale,
-Syncthing, VS Code, Chrome, Slack, Claude Desktop and Code, Go, Node, Prism,
-SSH. About 20 to 30 minutes with progress on screen, then it reboots once
-more. It was verified in QEMU on 2026-10-09 but has not yet installed a real
-machine; if the login screen comes up straight away, the hook did not take,
-and `bootstrap.sh --apps` in step 6 runs the script instead.
+makes the first boot do the whole setup unattended before the login screen:
+homelab-setup's apps script (base packages, Docker, Tailscale, Syncthing,
+VS Code, Chrome, Slack, Claude Desktop and Code, Go, Node, Prism, SSH), then
+this repo's `bootstrap.sh --unattended --gaming` (NVIDIA driver, Steam,
+repo-sync, the Glacier theme, with the two repos the installer carried
+dropped into `/mnt/data/repos`). About 30 to 45 minutes with progress on
+screen, then it reboots once more into the Glacier login screen. The chain
+was verified in QEMU on 2026-10-09 but has not yet installed a real machine;
+if the login screen comes up straight away, the hook did not take, and the
+"By hand" route below covers it.
 
-**USB (backup).** The same installer from the stick; the apps script then
-comes from `bootstrap.sh --apps` in step 6.
+**USB (backup).** The same installer from the stick, then the "By hand" route.
 
 Either way: Calamares, normal installation. If it offers third-party or
 proprietary drivers, leave that off: the right NVIDIA flavour comes in step 5,
@@ -128,22 +130,33 @@ formatted.
 Username `ryan` (the scripts assume it, and the netboot hook writes it into
 the first-boot service). Hostname: the one you picked.
 
-### 4. First boot
+### 4. First boot (PXE route: hands off)
 
-On the PXE route the first boot is the apps script and a reboot; the login
-screen is the second boot. Then, on both routes:
+The first boot runs the apps script and then `bootstrap.sh --unattended`,
+reboots, and the second boot is the Glacier login screen. Log in; the theme's
+session part applies itself a few seconds later (an autostart entry that
+removes itself). Then the three things only you can do:
+
+    gh auth login                                            # GitHub, so repo-sync can push and pull
+    sudo tailscale up --ssh
+    sudo bash /opt/homelab-setup/scripts/mount-network.sh    # Tower shares, asks for the SMB password
+    repo-clone-all                                           # the rest of the repos
+
+Then check (step 7) and tidy `/etc/fstab`: the installer writes the `/mnt/data`
+line with plain `defaults`; make it `defaults,noatime,nofail` like coyote.
+
+If the first boot went straight to a login screen, or `/var/log/homelab-setup.log`
+ends in an error, nothing is lost: take the "By hand" route in step 6.
+
+### 4b. By hand (USB route, or the hook did not take)
 
     sudo apt update && sudo apt full-upgrade -y && sudo reboot
 
 The ISO carries kernel 7.0.0-30, the archive is at 7.0.0-38, and the signed
 NVIDIA modules are built per kernel, so be on the current one before step 5.
-The apps script already upgraded, so on the PXE route this is quick.
+Then `sudo chown ryan: /mnt/data` and the fstab tidy above.
 
-The installer writes the `/mnt/data` line into `/etc/fstab` with plain
-`defaults`. Make it `defaults,noatime,nofail` like coyote, then
-`sudo chown ryan: /mnt/data`.
-
-### 5. NVIDIA
+### 5. NVIDIA (done by the first boot on the PXE route; here for the by-hand route and for understanding)
 
 What is going on, so the choices make sense:
 
@@ -188,13 +201,13 @@ framebuffer issue (`nvidia-drm` loads, no output), `initcall_blacklist=sysfb_ini
 on the kernel line is the known workaround. There is no iGPU to fall back to,
 so keep the stick.
 
-### 6. The rest
+### 6. The rest, by hand (USB route, or the hook did not take)
 
     sudo apt install -y gh
     gh auth login                       # GitHub.com, HTTPS, log in with a browser
     sudo mkdir -p /mnt/data/repos && sudo chown -R ryan: /mnt/data
     gh repo clone pyprk/kubuntu-setup /mnt/data/repos/kubuntu-setup
-    /mnt/data/repos/kubuntu-setup/scripts/bootstrap.sh --hostname NAME --gaming   # add --apps after a USB install
+    /mnt/data/repos/kubuntu-setup/scripts/bootstrap.sh --hostname NAME --gaming --apps
     sudo tailscale up --ssh
     sudo bash /mnt/data/repos/homelab-setup/scripts/mount-network.sh   # if bootstrap skipped it because Tailscale was not up yet
     sudo reboot
@@ -211,11 +224,11 @@ whenever; `install.sh` only puts the example there if nothing is.
 ### 7. Check
 
     nvidia-smi
+    tail -20 /var/log/homelab-setup.log            # the first-boot run: both scripts, any !! lines
     lspci -nnk | grep -A3 -iE 'network|ethernet'   # which Wi-Fi chip, and a "Kernel driver in use"
     sensors                                        # k10temp for the CPU; the HUD widget reads this
     tailscale status
     ls /mnt/tower/data                             # Tower shares (automount: the first access connects)
-    tail -5 /var/log/homelab-setup.log             # the first-boot apps run (PXE route)
     systemctl --user list-timers repo-sync.timer
     ls /mnt/data/repos
 

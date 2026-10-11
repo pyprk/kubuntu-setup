@@ -2,14 +2,16 @@
 # Sets up a fresh Kubuntu 26.04 the way my machines are set up. Safe to rerun.
 #
 #   scripts/bootstrap.sh [--hostname NAME] [--apps] [--gaming] [--dry-run]
+#   scripts/bootstrap.sh --unattended [--gaming]      (root, first boot, no session)
 #
 # In order:
 #   1. apt packages (the list at the top of this file)
 #   2. NVIDIA driver, if there is an NVIDIA card (Ubuntu's 580-open branch)
 #   3. Tailscale, installed and started (`sudo tailscale up --ssh` is left to you)
 #   4. Flatpak + Flathub + Prism Launcher
-#   5. repo-sync: /mnt/data/repos, the ~/.local/bin links, the systemd user timer
-#   6. every GitHub repo cloned (needs `gh auth login` first)
+#   5. repos: every GitHub repo cloned (needs `gh auth login` first); unattended,
+#      the copies the installer carried in /opt are moved to /mnt/data/repos instead
+#   6. repo-sync: the ~/.local/bin links and the systemd user timer
 #   7. --apps: homelab-setup's initialconfig-workstation.sh (desktop apps, Docker,
 #      Syncthing, dev runtimes). The "+ homelab setup" netboot entry already ran
 #      it on first boot, so this is for installs made from a USB stick.
@@ -18,17 +20,24 @@
 #      once; needs Tailscale up, otherwise it says so and is skipped)
 #  10. glacier-theme installed
 #
-# --gaming   adds Steam (with the 32-bit NVIDIA libraries), gamemode and mangohud
-# --dry-run  prints the commands that would change something instead of running them
+# --gaming      adds Steam (with the 32-bit NVIDIA libraries), gamemode and mangohud
+# --dry-run     prints the commands that would change something instead of running them
+# --unattended  how the first boot of a "+ homelab setup" netboot install runs this:
+#               as root, no session, no tty. The user is $SUDO_USER. Repos come from
+#               /opt (baked into the installer) instead of GitHub, repo-sync is wired
+#               up by file, the theme's session part is deferred to the first login
+#               (an autostart entry that removes itself), and the steps that need you
+#               (gh auth login, tailscale up, the SMB password) are left for later.
 #
-# Run as your user, from the checkout in /mnt/data/repos/kubuntu-setup, after
-# `sudo apt full-upgrade` and a reboot: the signed NVIDIA modules are built per
+# Interactive mode: run as your user, from the checkout in /mnt/data/repos/kubuntu-setup,
+# after `sudo apt full-upgrade` and a reboot: the signed NVIDIA modules are built per
 # kernel, so the running kernel has to be the current one.
 set -euo pipefail
 
 ROOT=/mnt/data/repos
 GIT_NAME=Ryan
 GIT_EMAIL=kemick.ryan@gmail.com
+GITHUB_USER=pyprk
 NVIDIA_FLAVOUR=580-open            # Blackwell (RTX 50) only works with the -open modules
 
 PACKAGES=(
@@ -39,33 +48,49 @@ PACKAGES=(
 )
 GAMING_PACKAGES=(steam-installer gamemode mangohud)
 
-HOST= APPS=0 GAMING=0 DRY=0
+HOST='' APPS=0 GAMING=0 DRY=0 UNATTENDED=0
 while [ $# -gt 0 ]; do
     case $1 in
-        --hostname) HOST=$2; shift 2 ;;
-        --apps)     APPS=1; shift ;;
-        --gaming)   GAMING=1; shift ;;
-        --dry-run)  DRY=1; shift ;;
-        -h|--help)  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *)          echo "unknown option: $1"; exit 1 ;;
+        --hostname)   HOST=$2; shift 2 ;;
+        --apps)       APPS=1; shift ;;
+        --gaming)     GAMING=1; shift ;;
+        --dry-run)    DRY=1; shift ;;
+        --unattended) UNATTENDED=1; shift ;;
+        -h|--help)    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)            echo "unknown option: $1"; exit 1 ;;
     esac
 done
 
-[ "$(id -u)" -ne 0 ] || { echo "Run as your user, not with sudo."; exit 1; }
+if [ "$UNATTENDED" = 1 ]; then
+    [ "$(id -u)" -eq 0 ] || { echo "--unattended runs as root."; exit 1; }
+    ME=${SUDO_USER:-ryan}
+    HOME_DIR=$(getent passwd "$ME" | cut -d: -f6)
+    [ -n "$HOME_DIR" ] && [ -d "$HOME_DIR" ] || { echo "no home directory for $ME"; exit 1; }
+    export DEBIAN_FRONTEND=noninteractive
+else
+    [ "$(id -u)" -ne 0 ] || { echo "Run as your user, not with sudo."; exit 1; }
+    ME=$USER
+    HOME_DIR=$HOME
+fi
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-case $HERE in
-    "$ROOT"/*) ;;
-    *)  if [ "$DRY" = 0 ]; then
-            echo "Run this from a checkout under $ROOT (this one is $HERE), so the repo-sync links stay valid:"
-            echo "  gh repo clone pyprk/kubuntu-setup $ROOT/kubuntu-setup"
-            exit 1
-        fi ;;
-esac
+if [ "$UNATTENDED" = 0 ] && [ "$DRY" = 0 ]; then
+    case $HERE in
+        "$ROOT"/*) ;;
+        *)  echo "Run this from a checkout under $ROOT (this one is $HERE), so the repo-sync links stay valid:"
+            echo "  gh repo clone $GITHUB_USER/kubuntu-setup $ROOT/kubuntu-setup"
+            exit 1 ;;
+    esac
+fi
 
 step()     { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 run()      { if [ "$DRY" = 1 ]; then echo "  (dry run) $*"; else "$@"; fi; }
-sudo_run() { run sudo "$@"; }
+# as_root / as_user: what changes the system vs what belongs to the user. In
+# interactive mode that is sudo vs plain; unattended (already root) it is plain
+# vs sudo -u. uq (user query) is a user-level check that always runs, even dry.
+as_root()  { if [ "$UNATTENDED" = 1 ]; then run "$@"; else run sudo "$@"; fi; }
+as_user()  { if [ "$UNATTENDED" = 1 ]; then run sudo -u "$ME" -H "$@"; else run "$@"; fi; }
+uq()       { if [ "$UNATTENDED" = 1 ]; then sudo -u "$ME" -H "$@"; else "$@"; fi; }
 has_nvidia() { command -v lspci >/dev/null && lspci -d 10de: 2>/dev/null | grep -qiE 'VGA|3D'; }
 tailscale_up() { command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; }
 # homelab-setup: the repo-synced clone if there is one, else the copy a
@@ -77,25 +102,36 @@ homelab_dir() {
     done
     return 1
 }
+# write_user_file <path> <content>: a file in the user's home, owned by the user
+write_user_file() {
+    if [ "$DRY" = 1 ]; then echo "  (dry run) write $1"; return 0; fi
+    mkdir -p "$(dirname "$1")"
+    printf '%s' "$2" > "$1"
+    chown "$ME:$ME" "$(dirname "$1")" "$1"
+}
 
 step "Kernel"
 newest=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's,.*/vmlinuz-,,' | sort -V | tail -1 || true)
 if [ -n "$newest" ] && [ "$newest" != "$(uname -r)" ]; then
-    echo "Running $(uname -r) but $newest is installed. Reboot first, then run this again."
-    [ "$DRY" = 1 ] || exit 1
+    if [ "$UNATTENDED" = 1 ]; then
+        echo "Running $(uname -r), $newest is installed; the reboot at the end of first boot takes care of it."
+    else
+        echo "Running $(uname -r) but $newest is installed. Reboot first, then run this again."
+        [ "$DRY" = 1 ] || exit 1
+    fi
 else
     echo "$(uname -r)"
 fi
 
 step "Packages"
-sudo_run apt-get update
-sudo_run apt-get install -y "${PACKAGES[@]}"
-git config --global user.name  >/dev/null || run git config --global user.name  "$GIT_NAME"
-git config --global user.email >/dev/null || run git config --global user.email "$GIT_EMAIL"
+as_root apt-get update
+as_root apt-get install -y "${PACKAGES[@]}"
+uq git config --global user.name  >/dev/null || as_user git config --global user.name  "$GIT_NAME"
+uq git config --global user.email >/dev/null || as_user git config --global user.email "$GIT_EMAIL"
 
 if [ -n "$HOST" ] && [ "$(hostname)" != "$HOST" ]; then
     step "Hostname: $HOST"
-    sudo_run hostnamectl set-hostname "$HOST"
+    as_root hostnamectl set-hostname "$HOST"
 fi
 
 step "NVIDIA"
@@ -105,10 +141,10 @@ if has_nvidia; then
     else
         if [ "$GAMING" = 1 ]; then
             # before the driver, so its 32-bit libraries (Steam) come along
-            sudo_run dpkg --add-architecture i386
-            sudo_run apt-get update
+            as_root dpkg --add-architecture i386
+            as_root apt-get update
         fi
-        sudo_run ubuntu-drivers install "nvidia:$NVIDIA_FLAVOUR"
+        as_root ubuntu-drivers install "nvidia:$NVIDIA_FLAVOUR"
         echo "If a Secure Boot (MOK) password was asked for, enroll it on the next reboot (desktop.md, step 5)."
     fi
 else
@@ -119,54 +155,83 @@ step "Tailscale"
 if ! command -v tailscale >/dev/null; then
     if [ "$DRY" = 1 ]; then
         echo "  (dry run) curl -fsSL https://tailscale.com/install.sh | sh"
+    elif [ "$UNATTENDED" = 1 ]; then
+        curl -fsSL https://tailscale.com/install.sh | sh || echo "  !! Tailscale install failed; sudo apt install tailscale later"
     else
         curl -fsSL https://tailscale.com/install.sh | sh
     fi
 fi
-sudo_run systemctl daemon-reload        # the package's unit sometimes needs this before it starts
-sudo_run systemctl enable --now tailscaled
+as_root systemctl daemon-reload        # the package's unit sometimes needs this before it starts
+as_root systemctl enable --now tailscaled || echo "  !! tailscaled did not start"
 if command -v tailscale >/dev/null && ! tailscale_up; then
     echo "not logged in: sudo tailscale up --ssh"
 fi
 
 step "Flatpak"
-sudo_run flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+as_root flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 if ! flatpak info org.prismlauncher.PrismLauncher >/dev/null 2>&1; then
-    sudo_run flatpak install -y flathub org.prismlauncher.PrismLauncher
+    as_root flatpak install -y flathub org.prismlauncher.PrismLauncher || echo "  !! Prism Launcher did not install; flatpak install flathub org.prismlauncher.PrismLauncher later"
 fi
 
 if [ "$GAMING" = 1 ]; then
     step "Gaming"
-    sudo_run dpkg --add-architecture i386
-    sudo_run apt-get update
-    sudo_run apt-get install -y "${GAMING_PACKAGES[@]}"
+    as_root dpkg --add-architecture i386
+    as_root apt-get update
+    # steam-installer asks about Valve's licence through debconf; answer it up front
+    as_root sh -c 'echo "steam-installer steam/question select I AGREE" | debconf-set-selections'
+    as_root apt-get install -y "${GAMING_PACKAGES[@]}" || echo "  !! gaming packages did not all install; sudo apt install ${GAMING_PACKAGES[*]} later"
     if has_nvidia; then
-        sudo_run apt-get install -y "libnvidia-gl-${NVIDIA_FLAVOUR%%-*}:i386"   # 32-bit Vulkan/GL for Proton
+        as_root apt-get install -y "libnvidia-gl-${NVIDIA_FLAVOUR%%-*}:i386" || true   # 32-bit Vulkan/GL for Proton
     fi
 fi
 
-step "repo-sync"
-[ -d /mnt/data ] || sudo_run mkdir -p /mnt/data
-[ -w /mnt/data ] || sudo_run chown "$USER:$USER" /mnt/data
-run mkdir -p "$ROOT" ~/.local/bin ~/.config/systemd/user
-run ln -sfn "$HERE/repo-sync/repo-sync"       ~/.local/bin/repo-sync
-run ln -sfn "$HERE/repo-sync/repo-clone-all"  ~/.local/bin/repo-clone-all
-run cp "$HERE/repo-sync/repo-sync.service" "$HERE/repo-sync/repo-sync.timer" ~/.config/systemd/user/
-run systemctl --user daemon-reload
-run systemctl --user enable --now repo-sync.timer
-
 step "Repos"
-if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+[ -d /mnt/data ] || as_root mkdir -p /mnt/data
+[ -w /mnt/data ] && [ "$UNATTENDED" = 0 ] || as_root chown "$ME:$ME" /mnt/data
+as_user mkdir -p "$ROOT"
+if [ "$UNATTENDED" = 1 ]; then
+    # The installer carried these in /opt (netboot-build-autosetup.sh bakes them in).
+    # Move them to where repo-sync keeps repos, as real clones pointing at GitHub, so
+    # the first repo-sync after `gh auth login` brings them up to date.
+    for r in kubuntu-setup glacier-theme; do
+        if [ -d "/opt/$r" ] && [ ! -e "$ROOT/$r" ]; then
+            as_root mv "/opt/$r" "$ROOT/$r"
+            as_root chown -R "$ME:$ME" "$ROOT/$r"
+            [ -d "$ROOT/$r/.git" ] && as_user git -C "$ROOT/$r" remote set-url origin "https://github.com/$GITHUB_USER/$r"
+            echo "$r: moved to $ROOT/$r"
+        elif [ -e "$ROOT/$r" ]; then
+            echo "$r: already at $ROOT/$r"
+        else
+            echo "$r: not in /opt (the installer did not carry it); gh auth login && repo-clone-all later"
+        fi
+    done
+    [ -d "$ROOT/kubuntu-setup" ] && HERE="$ROOT/kubuntu-setup"
+    echo "GitHub login is left for you: gh auth login, then repo-clone-all for the rest."
+elif command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
     run "$HERE/repo-sync/repo-clone-all" || echo "some clones failed, see above"
 else
     echo "gh is not logged in. Later: gh auth login && repo-clone-all, then rerun this."
 fi
 
-if [ "$APPS" = 1 ]; then
+step "repo-sync"
+as_user mkdir -p "$HOME_DIR/.local/bin" "$HOME_DIR/.config/systemd/user/timers.target.wants"
+as_user ln -sfn "$HERE/repo-sync/repo-sync"       "$HOME_DIR/.local/bin/repo-sync"
+as_user ln -sfn "$HERE/repo-sync/repo-clone-all"  "$HOME_DIR/.local/bin/repo-clone-all"
+as_user cp "$HERE/repo-sync/repo-sync.service" "$HERE/repo-sync/repo-sync.timer" "$HOME_DIR/.config/systemd/user/"
+if [ "$UNATTENDED" = 1 ]; then
+    # No user session yet, so no `systemctl --user`. This symlink is exactly what
+    # `enable` would create; the timer starts with the user's first login.
+    as_user ln -sfn ../repo-sync.timer "$HOME_DIR/.config/systemd/user/timers.target.wants/repo-sync.timer"
+else
+    as_user systemctl --user daemon-reload
+    as_user systemctl --user enable --now repo-sync.timer
+fi
+
+if [ "$APPS" = 1 ] && [ "$UNATTENDED" = 0 ]; then
     step "Desktop apps (homelab-setup)"
     if H=$(homelab_dir); then
         [ -e /var/lib/homelab-setup/firstboot-done ] && echo "already ran on first boot (netboot install); running again, it is safe to rerun"
-        sudo_run bash "$H/scripts/initialconfig-workstation.sh"
+        as_root bash "$H/scripts/initialconfig-workstation.sh"
     else
         echo "homelab-setup is not cloned yet (gh auth login, then rerun with --apps)"
     fi
@@ -176,17 +241,19 @@ step "Docker"
 if command -v docker >/dev/null; then
     echo "docker is installed"
 else
-    sudo_run apt-get install -y docker.io docker-compose-v2
+    as_root apt-get install -y docker.io docker-compose-v2
 fi
-if ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
-    sudo_run usermod -aG docker "$USER"
-    echo "added $USER to the docker group (takes effect at next login)"
+if ! id -nG "$ME" | tr ' ' '\n' | grep -qx docker; then
+    as_root usermod -aG docker "$ME"
+    echo "added $ME to the docker group (takes effect at next login)"
 fi
 
 step "Tower shares"
-if H=$(homelab_dir); then
+if [ "$UNATTENDED" = 1 ]; then
+    echo "needs Tailscale up and the SMB password; after login:  sudo tailscale up --ssh && sudo bash /opt/homelab-setup/scripts/mount-network.sh"
+elif H=$(homelab_dir); then
     if tailscale_up; then
-        sudo_run bash "$H/scripts/mount-network.sh"
+        as_root bash "$H/scripts/mount-network.sh"
     else
         echo "Tailscale is not up. After 'sudo tailscale up --ssh':  sudo bash $H/scripts/mount-network.sh"
     fi
@@ -197,18 +264,43 @@ fi
 step "Glacier theme"
 THEME=$ROOT/glacier-theme
 if [ -x "$THEME/install.sh" ]; then
-    run "$THEME/install.sh"
-    sudo_run "$THEME/install-login.sh"
-    sudo_run "$THEME/install-lockscreen.sh"
-    sudo_run "$THEME/install-plymouth.sh"
+    if [ "$UNATTENDED" = 1 ]; then
+        # Links, colour scheme, shader: fine without a session. Applying to Plasma is
+        # not, so an autostart entry runs apply.sh in the first session and removes itself.
+        as_user "$THEME/install.sh" --no-apply
+        write_user_file "$HOME_DIR/.config/autostart/glacier-first-login.desktop" "[Desktop Entry]
+Type=Application
+Name=Glacier first-login apply
+Comment=Applies the Glacier theme to the first Plasma session, then removes itself
+Exec=bash -c \"sleep 10; $THEME/apply.sh; rm -f ~/.config/autostart/glacier-first-login.desktop\"
+X-KDE-autostart-after=panel
+OnlyShowIn=KDE;
+"
+        echo "the session part applies itself at the first login"
+    else
+        as_user "$THEME/install.sh"
+    fi
+    as_root "$THEME/install-login.sh"
+    as_root "$THEME/install-lockscreen.sh"
+    as_root "$THEME/install-plymouth.sh"
 else
     echo "$THEME is not there yet, skipped"
 fi
 
 step "Done"
-cat <<EOF
+if [ "$UNATTENDED" = 1 ]; then
+    cat <<EOF
+After the reboot, log in and run:
+  gh auth login                                            GitHub, so repo-sync can push and pull
+  sudo tailscale up --ssh
+  sudo bash /opt/homelab-setup/scripts/mount-network.sh    Tower shares (SMB password)
+  repo-clone-all                                           the rest of the repos
+EOF
+else
+    cat <<EOF
 Next:
   sudo tailscale up --ssh     if tailscale status says it is logged out (then rerun this for the Tower shares)
   sudo reboot                 for the NVIDIA driver, the docker group, the hostname and the boot splash
 Then: nvidia-smi · tailscale status · ls /mnt/tower/data · systemctl --user list-timers repo-sync.timer · log out and in for the theme
 EOF
+fi

@@ -30,11 +30,18 @@ The apps layer is the other repo, `homelab-setup` (tower's
 `initialconfig-workstation.sh` does the base packages, Docker, Tailscale,
 Syncthing, VS Code, Chrome, Slack, Claude Desktop and Code, dev runtimes and
 SSH, and its `mount-network.sh` sets up the `/mnt/tower/*` automounts. It also
-holds tower's netboot menu. Installing from the "+ homelab setup" PXE entry
-runs the apps script on the first boot; from a USB stick, `bootstrap.sh --apps`
-runs it. `bootstrap.sh` runs `mount-network.sh` either way (once Tailscale is
-up). Docker comes from that script when it has run, else `bootstrap.sh`
-installs `docker.io`.
+holds tower's netboot menu.
+
+Installing from the "+ homelab setup" PXE entry runs the apps script on the
+first boot and then this repo's `bootstrap.sh --unattended --gaming`, when
+tower's netboot build carried this repo and `glacier-theme` along (clones
+next to homelab-setup on tower). Unattended means: repos come from `/opt`
+instead of GitHub and are moved to `/mnt/data/repos`, repo-sync is wired up
+by file, the theme's session part runs itself at the first login, and the
+three interactive steps (`gh auth login`, `tailscale up`, the SMB password)
+are printed for afterwards. From a USB stick, `bootstrap.sh --apps` runs the
+apps script and the rest interactively. Docker comes from the apps script
+when it has run, else `bootstrap.sh` installs `docker.io`.
 
 ## Drives (coyote)
 
