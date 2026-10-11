@@ -119,16 +119,26 @@ if the login screen comes up straight away, the hook did not take, and the
 "By hand" route below covers it.
 
 **If the live boot stalls** (this box, 2026-10-11: the text console stops
-after `Started systemd-rfkill.service` and Ctrl+Alt+F2 gives no login):
-reboot, and in the Tower menu take the last item, **Kernel parameters for
-the next boot**, type `nomodeset`, Enter, then the Kubuntu entry again. The
-live system then runs on basic graphics (the installer is fine with it, just
-slower). The "+ homelab setup" installer step carries `nomodeset` into the
-new system's GRUB so the first boot does not hang the same way, and
-`bootstrap.sh` drops it again once the NVIDIA driver is in. Still stuck
-with `nomodeset`: the graphics driver was not it. The Wi-Fi card's driver
-loads at the same point in the boot; `nomodeset modprobe.blacklist=mt7925e,rtw89_pci`
-rules it out (costs nothing on the wire).
+after `Started systemd-rfkill.service`, Ctrl+Alt+F2 gives no login, and
+`nomodeset` alone did not help): reboot, and in the Tower menu take the last
+item, **Kernel parameters for the next boot**, type
+
+    nomodeset modprobe.blacklist=mt7925e,rtw89_8922ae,ath12k,iwlwifi,btusb systemd.debug_shell=1
+
+Enter, then the Kubuntu entry again. That keeps the graphics driver, every
+Wi-Fi 7 driver the board might want and Bluetooth out of the live session
+(nothing is lost on the wire; the live system runs on basic graphics, the
+installer is fine with it) and gives a root shell on **Ctrl+Alt+F9** from
+early in the boot. If it still stalls, that shell says why: `systemctl
+list-jobs`, `dmesg | tail -30`, `lspci -nn | grep -iE 'net|wire'` (the
+Wi-Fi chip). No shell either, and Caps Lock's light does not toggle: the
+kernel itself is frozen, and the culprit is a driver not on that list.
+
+The "+ homelab setup" installer step carries `nomodeset` and the
+`modprobe.blacklist=` into the new system's GRUB so the first boot does not
+hang the same way; `bootstrap.sh` drops `nomodeset` once the NVIDIA driver is
+in, and the blacklist stays in `/etc/default/grub.d/91-homelab-blacklist.cfg`
+until you remove it (the file says how) once a kernel fixes the driver.
 
 **USB (backup).** The same installer from the stick, then the "By hand"
 route. The stick's live system has the same driver, so if it stalls the
