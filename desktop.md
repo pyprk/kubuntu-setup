@@ -21,10 +21,18 @@ and `lspci -nn | grep -iE 'network|ethernet|non-volatile'`.
 ## Before it arrives
 
 **Install medium.** Tower's netboot menu already serves Kubuntu 26.04, with a
-"+ homelab setup" variant that runs the apps script on first boot, so the PXE
+"+ homelab setup" variant that does the whole setup on first boot, so the PXE
 route needs nothing prepared. The USB stick below is the backup. Either way it
 is Kubuntu 26.04: Plasma 6.6, Linux 7.0, Wayland only (the X11 session is not
 installed and not supported by the Kubuntu team).
+
+**Logins, optional.** To have the first boot also log in to GitHub, Tailscale
+and the Tower shares, run `netboot-secrets.sh` on tower the evening before
+(homelab-setup, `docs/netboot-local-isos.md`): it asks for a boot passphrase,
+a GitHub classic token (scopes `repo`, `read:org`, `workflow`), a single-use
+pre-authorized Tailscale key and the SMB password, and the next sync adds a
+"+ homelab setup + secrets" menu entry. Afterwards `netboot-secrets.sh --remove`.
+Without it, those three logins are the only commands left after the install.
 
 **ISO** for the stick, 26.04.1:
 
@@ -95,7 +103,9 @@ you what is in it.
 
 **PXE (preferred).** On the wire. Network boot → netboot.xyz main menu →
 **Custom URL Menu** (near the bottom; the built-in Linux menus stop at 25.x) →
-**kubuntu 26.04 desktop amd64 + homelab setup**. The ISO loads into RAM over
+**kubuntu 26.04 desktop amd64 + homelab setup**, or the **+ secrets** variant
+when tower has one: it asks for the passphrase (Enter skips it, and the
+entry then behaves like the plain one). The ISO loads into RAM over
 HTTP, then it is the normal Kubuntu installer. The "+ homelab setup" part
 makes the first boot do the whole setup unattended before the login screen:
 homelab-setup's apps script (base packages, Docker, Tailscale, Syncthing,
@@ -135,7 +145,11 @@ the first-boot service). Hostname: the one you picked.
 The first boot runs the apps script and then `bootstrap.sh --unattended`,
 reboots, and the second boot is the Glacier login screen. Log in; the theme's
 session part applies itself a few seconds later (an autostart entry that
-removes itself). Then the three things only you can do:
+removes itself).
+
+With the "+ secrets" entry the logins happened on the first boot too, and
+nothing is left but the checks in step 7. Without it, the three things only
+you can do:
 
     gh auth login                                            # GitHub, so repo-sync can push and pull
     sudo tailscale up --ssh

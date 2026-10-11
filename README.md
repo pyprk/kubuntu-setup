@@ -39,6 +39,9 @@ next to homelab-setup on tower). Unattended means: repos come from `/opt`
 instead of GitHub and are moved to `/mnt/data/repos`, repo-sync is wired up
 by file, the theme's session part runs itself at the first login, and the
 three interactive steps (`gh auth login`, `tailscale up`, the SMB password)
+are done too when the "+ secrets" variant of the entry handed over a GitHub
+token, a Tailscale auth key and the SMB password (homelab-setup's
+`netboot-secrets.sh`); otherwise they
 are printed for afterwards. From a USB stick, `bootstrap.sh --apps` runs the
 apps script and the rest interactively. Docker comes from the apps script
 when it has run, else `bootstrap.sh` installs `docker.io`.

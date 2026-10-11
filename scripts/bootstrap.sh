@@ -164,7 +164,16 @@ fi
 as_root systemctl daemon-reload        # the package's unit sometimes needs this before it starts
 as_root systemctl enable --now tailscaled || echo "  !! tailscaled did not start"
 if command -v tailscale >/dev/null && ! tailscale_up; then
-    echo "not logged in: sudo tailscale up --ssh"
+    if [ "$UNATTENDED" = 1 ] && [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
+        # the "+ secrets" netboot entry hands over a pre-authorized key
+        if run tailscale up --ssh --authkey "$TAILSCALE_AUTHKEY"; then
+            echo "joined the tailnet with the auth key"
+        else
+            echo "  !! tailscale up with the auth key failed (expired or used?); sudo tailscale up --ssh after login"
+        fi
+    else
+        echo "not logged in: sudo tailscale up --ssh"
+    fi
 fi
 
 step "Flatpak"
@@ -190,23 +199,38 @@ step "Repos"
 [ -w /mnt/data ] && [ "$UNATTENDED" = 0 ] || as_root chown "$ME:$ME" /mnt/data
 as_user mkdir -p "$ROOT"
 if [ "$UNATTENDED" = 1 ]; then
-    # The installer carried these in /opt (netboot-build-autosetup.sh bakes them in).
-    # Move them to where repo-sync keeps repos, as real clones pointing at GitHub, so
-    # the first repo-sync after `gh auth login` brings them up to date.
+    # With a GitHub token (the "+ secrets" netboot entry): log gh in as the user,
+    # let git use it, and clone everything, the same as an interactive run.
+    if [ -n "${GITHUB_PAT:-}" ] && ! uq gh auth status >/dev/null 2>&1; then
+        if [ "$DRY" = 1 ]; then
+            echo "  (dry run) gh auth login --with-token (as $ME) && gh auth setup-git"
+        elif printf '%s' "$GITHUB_PAT" | sudo -u "$ME" -H gh auth login --with-token && sudo -u "$ME" -H gh auth setup-git; then
+            echo "gh logged in as the token's owner"
+        else
+            echo "  !! gh auth login with the token failed; gh auth login after logging in"
+        fi
+    fi
+    if uq gh auth status >/dev/null 2>&1; then
+        as_user "$HERE/repo-sync/repo-clone-all" || echo "some clones failed, see above"
+    fi
+    # Without a token, or for anything the clone missed: the installer carried these
+    # two in /opt (netboot-build-autosetup.sh bakes them in). Move them to where
+    # repo-sync keeps repos, as real clones pointing at GitHub, so the first
+    # repo-sync after `gh auth login` brings them up to date.
     for r in kubuntu-setup glacier-theme; do
-        if [ -d "/opt/$r" ] && [ ! -e "$ROOT/$r" ]; then
+        if [ -e "$ROOT/$r" ]; then
+            echo "$r: at $ROOT/$r"
+        elif [ -d "/opt/$r" ]; then
             as_root mv "/opt/$r" "$ROOT/$r"
             as_root chown -R "$ME:$ME" "$ROOT/$r"
             [ -d "$ROOT/$r/.git" ] && as_user git -C "$ROOT/$r" remote set-url origin "https://github.com/$GITHUB_USER/$r"
-            echo "$r: moved to $ROOT/$r"
-        elif [ -e "$ROOT/$r" ]; then
-            echo "$r: already at $ROOT/$r"
+            echo "$r: moved from /opt to $ROOT/$r"
         else
             echo "$r: not in /opt (the installer did not carry it); gh auth login && repo-clone-all later"
         fi
     done
     [ -d "$ROOT/kubuntu-setup" ] && HERE="$ROOT/kubuntu-setup"
-    echo "GitHub login is left for you: gh auth login, then repo-clone-all for the rest."
+    uq gh auth status >/dev/null 2>&1 || echo "GitHub login is left for you: gh auth login, then repo-clone-all for the rest."
 elif command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
     run "$HERE/repo-sync/repo-clone-all" || echo "some clones failed, see above"
 else
@@ -250,7 +274,14 @@ fi
 
 step "Tower shares"
 if [ "$UNATTENDED" = 1 ]; then
-    echo "needs Tailscale up and the SMB password; after login:  sudo tailscale up --ssh && sudo bash /opt/homelab-setup/scripts/mount-network.sh"
+    if H=$(homelab_dir) && [ -n "${SMB_PASSWORD:-}" ] && tailscale_up; then
+        # the "+ secrets" netboot entry hands over the SMB password; the mount script
+        # takes it from the environment when there is no terminal
+        run env SMB_PASSWORD="$SMB_PASSWORD" bash "$H/scripts/mount-network.sh" </dev/null \
+            || echo "  !! mount-network.sh failed; sudo bash $H/scripts/mount-network.sh after login"
+    else
+        echo "needs Tailscale up and the SMB password; after login:  sudo tailscale up --ssh && sudo bash /opt/homelab-setup/scripts/mount-network.sh"
+    fi
 elif H=$(homelab_dir); then
     if tailscale_up; then
         as_root bash "$H/scripts/mount-network.sh"
@@ -289,13 +320,16 @@ fi
 
 step "Done"
 if [ "$UNATTENDED" = 1 ]; then
-    cat <<EOF
-After the reboot, log in and run:
-  gh auth login                                            GitHub, so repo-sync can push and pull
-  sudo tailscale up --ssh
-  sudo bash /opt/homelab-setup/scripts/mount-network.sh    Tower shares (SMB password)
-  repo-clone-all                                           the rest of the repos
-EOF
+    LEFT=()
+    uq gh auth status >/dev/null 2>&1 || LEFT+=("  gh auth login                                            GitHub, so repo-sync can push and pull" "  repo-clone-all                                           the rest of the repos")
+    tailscale_up || LEFT+=("  sudo tailscale up --ssh")
+    [ -s /etc/smb-credentials/tower ] || LEFT+=("  sudo bash /opt/homelab-setup/scripts/mount-network.sh    Tower shares (SMB password)")
+    if [ "${#LEFT[@]}" -eq 0 ]; then
+        echo "Nothing left to log in to. After the reboot, log in and it is all there."
+    else
+        echo "After the reboot, log in and run:"
+        printf '%s\n' "${LEFT[@]}"
+    fi
 else
     cat <<EOF
 Next:
