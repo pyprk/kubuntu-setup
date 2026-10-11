@@ -123,6 +123,16 @@ else
     echo "$(uname -r)"
 fi
 
+step "fstab"
+if awk '$2 == "/mnt/data" && $4 == "defaults"' /etc/fstab 2>/dev/null | grep -q .; then
+    # the installer writes plain "defaults": noatime like coyote, nofail so a
+    # missing data partition never blocks the boot
+    as_root sed -i -E 's|^(\S+\s+/mnt/data\s+\S+\s+)defaults(\s)|\1defaults,noatime,nofail\2|' /etc/fstab
+    echo "/mnt/data: options set to defaults,noatime,nofail"
+else
+    echo "/mnt/data: nothing to change"
+fi
+
 step "Packages"
 as_root apt-get update
 as_root apt-get install -y "${PACKAGES[@]}"
@@ -319,22 +329,50 @@ else
 fi
 
 step "Done"
-if [ "$UNATTENDED" = 1 ]; then
-    LEFT=()
-    uq gh auth status >/dev/null 2>&1 || LEFT+=("  gh auth login                                            GitHub, so repo-sync can push and pull" "  repo-clone-all                                           the rest of the repos")
-    tailscale_up || LEFT+=("  sudo tailscale up --ssh")
-    [ -s /etc/smb-credentials/tower ] || LEFT+=("  sudo bash /opt/homelab-setup/scripts/mount-network.sh    Tower shares (SMB password)")
+# What is still to do, as a note in the user's home for after login (and on screen).
+LEFT=()
+uq gh auth status >/dev/null 2>&1 || LEFT+=("gh auth login                                            # GitHub, so repo-sync can push and pull" "repo-clone-all                                           # the rest of the repos")
+tailscale_up || LEFT+=("sudo tailscale up --ssh")
+[ -s /etc/smb-credentials/tower ] || LEFT+=("sudo bash /opt/homelab-setup/scripts/mount-network.sh    # Tower shares, asks for the SMB password")
+[ "$UNATTENDED" = 1 ] || LEFT+=("sudo reboot                                              # NVIDIA driver, docker group, hostname, boot splash; then log out and in for the theme")
+NOTE="$HOME_DIR/SETUP-NEXT.md"
+NOTE_TEXT=$(
+    echo "# $(hostname): what is left"
+    echo
+    echo "Written by kubuntu-setup/scripts/bootstrap.sh on $(date '+%Y-%m-%d %H:%M')."
+    [ "$UNATTENDED" = 1 ] && echo "First-boot log: /var/log/homelab-setup.log"
+    echo
+    echo "## Still to do"
+    echo
     if [ "${#LEFT[@]}" -eq 0 ]; then
-        echo "Nothing left to log in to. After the reboot, log in and it is all there."
+        echo "Nothing to log in to: it was all done on the first boot."
     else
-        echo "After the reboot, log in and run:"
-        printf '%s\n' "${LEFT[@]}"
+        printf '    %s\n' "${LEFT[@]}"
     fi
-else
-    cat <<EOF
-Next:
-  sudo tailscale up --ssh     if tailscale status says it is logged out (then rerun this for the Tower shares)
-  sudo reboot                 for the NVIDIA driver, the docker group, the hostname and the boot splash
-Then: nvidia-smi · tailscale status · ls /mnt/tower/data · systemctl --user list-timers repo-sync.timer · log out and in for the theme
+    cat <<'EOF'
+
+## Tidy
+
+- ~/.config/glacier/servers.json for the HUD widget (copy it from coyote; the example is there until then)
+- Steam: Settings -> Compatibility -> Enable Steam Play for all other titles
+
+## Check
+
+    nvidia-smi
+    tail -20 /var/log/homelab-setup.log
+    tailscale status
+    ls /mnt/tower/data
+    systemctl --user list-timers repo-sync.timer
+    ls /mnt/data/repos
+
+## If something went wrong
+
+    /mnt/data/repos/kubuntu-setup/scripts/bootstrap.sh --gaming    # safe to rerun; it skips what is done
+
+Delete this file when done.
 EOF
-fi
+)
+write_user_file "$NOTE" "$NOTE_TEXT"$'\n'
+echo "$NOTE_TEXT"
+echo
+echo "(this note is also at $NOTE)"

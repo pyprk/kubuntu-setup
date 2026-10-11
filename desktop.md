@@ -147,9 +147,10 @@ reboots, and the second boot is the Glacier login screen. Log in; the theme's
 session part applies itself a few seconds later (an autostart entry that
 removes itself).
 
-With the "+ secrets" entry the logins happened on the first boot too, and
-nothing is left but the checks in step 7. Without it, the three things only
-you can do:
+`~/SETUP-NEXT.md` is waiting in the home folder: it lists only what is still
+outstanding on this machine, plus the checks. With the "+ secrets" entry the
+logins happened on the first boot too, and nothing is left but the checks in
+step 7. Without it, the three things only you can do:
 
     gh auth login                                            # GitHub, so repo-sync can push and pull
     sudo tailscale up --ssh
