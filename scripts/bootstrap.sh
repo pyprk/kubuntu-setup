@@ -157,6 +157,13 @@ if has_nvidia; then
         as_root ubuntu-drivers install "nvidia:$NVIDIA_FLAVOUR"
         echo "If a Secure Boot (MOK) password was asked for, enroll it on the next reboot (desktop.md, step 5)."
     fi
+    # The netboot installer leaves this when the live session needed nomodeset
+    # (nouveau hung on the card). The NVIDIA driver needs modesetting, so it goes.
+    if [ -f /etc/default/grub.d/90-homelab-nomodeset.cfg ]; then
+        echo "dropping the installer's nomodeset from GRUB: the NVIDIA driver needs modesetting"
+        as_root rm -f /etc/default/grub.d/90-homelab-nomodeset.cfg
+        as_root update-grub
+    fi
 else
     echo "no NVIDIA card, skipped"
 fi

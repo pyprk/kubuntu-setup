@@ -118,7 +118,23 @@ was verified in QEMU on 2026-10-09 but has not yet installed a real machine;
 if the login screen comes up straight away, the hook did not take, and the
 "By hand" route below covers it.
 
-**USB (backup).** The same installer from the stick, then the "By hand" route.
+**If the live boot stalls** (this box, 2026-10-11: the text console stops
+after `Started systemd-rfkill.service` and Ctrl+Alt+F2 gives no login):
+reboot, and in the Tower menu take the last item, **Kernel parameters for
+the next boot**, type `nomodeset`, Enter, then the Kubuntu entry again. The
+live system then runs on basic graphics (the installer is fine with it, just
+slower). The "+ homelab setup" installer step carries `nomodeset` into the
+new system's GRUB so the first boot does not hang the same way, and
+`bootstrap.sh` drops it again once the NVIDIA driver is in. Still stuck
+with `nomodeset`: the graphics driver was not it. The Wi-Fi card's driver
+loads at the same point in the boot; `nomodeset modprobe.blacklist=mt7925e,rtw89_pci`
+rules it out (costs nothing on the wire).
+
+**USB (backup).** The same installer from the stick, then the "By hand"
+route. The stick's live system has the same driver, so if it stalls the
+same way: at its GRUB menu, `e`, add `nomodeset` to the end of the `linux`
+line, F10. The installed system then needs the same at its own GRUB (hold
+Shift, or tap Esc, while booting) until step 5 has installed the driver.
 
 Either way: Calamares, normal installation. If it offers third-party or
 proprietary drivers, leave that off: the right NVIDIA flavour comes in step 5,
@@ -216,6 +232,11 @@ framebuffer issue (`nvidia-drm` loads, no output), `initcall_blacklist=sysfb_ini
 on the kernel line is the known workaround. There is no iGPU to fall back to,
 so keep the stick.
 
+**Basic graphics that never go away** after a `nomodeset` PXE install: the
+installer's drop-in `/etc/default/grub.d/90-homelab-nomodeset.cfg` is still
+there, which means `bootstrap.sh` did not reach its NVIDIA step. Once the
+driver is in: `sudo rm /etc/default/grub.d/90-homelab-nomodeset.cfg && sudo update-grub`.
+
 ### 6. The rest, by hand (USB route, or the hook did not take)
 
     sudo apt install -y gh
@@ -279,6 +300,11 @@ Wi-Fi misbehaves in any other way, use the cable and come back to it.
 - The "+ homelab setup" netboot entry carries the copy of homelab-setup that
   was on tower when `netboot-sync-isos.sh` last ran, not the GitHub copy. Edits
   made on GitHub reach tower by a pull (that repo's README, "Version control").
+- The live Kubuntu 26.04 system stalled twice on this box (2026-10-11) after
+  `Started systemd-rfkill.service`, with no console on Ctrl+Alt+F2. The
+  in-kernel `nouveau` driver on the RTX 5060 Ti is the suspect; `nomodeset`
+  (step 3) is the workaround, and is what the Tower menu's **Kernel
+  parameters** item is for.
 - Warranty is one year through the Amazon "Manufacturer", EverBright
   Electronics Inc. Keep the box a month.
 
