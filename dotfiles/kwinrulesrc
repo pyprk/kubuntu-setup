@@ -1,0 +1,19 @@
+[General]
+count=2
+rules=steam-client-icon,steam-ddv-icon
+
+[steam-client-icon]
+Description=Steam client: map window to steam.desktop (fixes generic icon)
+desktopfile=steam
+desktopfilerule=2
+wmclass=steam
+wmclasscomplete=false
+wmclassmatch=1
+
+[steam-ddv-icon]
+Description=Disney Dreamlight Valley (Proton): map to its launcher
+desktopfile=Disney Dreamlight Valley
+desktopfilerule=2
+wmclass=steam_app_1401590
+wmclasscomplete=false
+wmclassmatch=1

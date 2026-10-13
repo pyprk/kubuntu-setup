@@ -297,7 +297,7 @@ if [ "$UNATTENDED" = 1 ]; then
         run env SMB_PASSWORD="$SMB_PASSWORD" bash "$H/scripts/mount-network.sh" </dev/null \
             || echo "  !! mount-network.sh failed; sudo bash $H/scripts/mount-network.sh after login"
     else
-        echo "needs Tailscale up and the SMB password; after login:  sudo tailscale up --ssh && sudo bash /opt/homelab-setup/scripts/mount-network.sh"
+        echo "needs Tailscale up and the SMB password; after login:  sudo tailscale up --ssh && sudo bash $ROOT/homelab-setup/scripts/mount-network.sh"
     fi
 elif H=$(homelab_dir); then
     if tailscale_up; then
@@ -335,12 +335,36 @@ else
     echo "$THEME is not there yet, skipped"
 fi
 
+step "Dotfiles"
+# Hand-made configs kept in dotfiles/ (never secrets: repo-sync pushes this repo
+# to GitHub). Each one is copied into place only when it is missing, so a file
+# the user has changed since is never overwritten.
+DOTFILES=$HERE/dotfiles
+while read -r src dest; do
+    if [ -e "$HOME_DIR/$dest" ]; then
+        continue
+    elif [ ! -e "$DOTFILES/$src" ]; then
+        echo "  !! $DOTFILES/$src is missing, skipped"
+        continue
+    fi
+    as_user mkdir -p "$HOME_DIR/$(dirname "$dest")"
+    as_user cp -a "$DOTFILES/$src" "$HOME_DIR/$dest"
+    echo "  -> ~/$dest"
+done <<'EOF'
+steam-launch                              .local/bin/steam-launch
+kwinrulesrc                               .config/kwinrulesrc
+MangoHud.conf                             .config/MangoHud/MangoHud.conf
+90-nvidia-shader-cache.conf               .config/environment.d/90-nvidia-shader-cache.conf
+kglobalshortcutsrc                        .config/kglobalshortcutsrc
+plasma-org.kde.plasma.desktop-appletsrc   .config/plasma-org.kde.plasma.desktop-appletsrc
+EOF
+
 step "Done"
 # What is still to do, as a note in the user's home for after login (and on screen).
 LEFT=()
 uq gh auth status >/dev/null 2>&1 || LEFT+=("gh auth login                                            # GitHub, so repo-sync can push and pull" "repo-clone-all                                           # the rest of the repos")
 tailscale_up || LEFT+=("sudo tailscale up --ssh")
-[ -s /etc/smb-credentials/tower ] || LEFT+=("sudo bash /opt/homelab-setup/scripts/mount-network.sh    # Tower shares, asks for the SMB password")
+[ -s /etc/smb-credentials/tower ] || LEFT+=("sudo bash $ROOT/homelab-setup/scripts/mount-network.sh    # Tower shares, asks for the SMB password")
 [ "$UNATTENDED" = 1 ] || LEFT+=("sudo reboot                                              # NVIDIA driver, docker group, hostname, boot splash; then log out and in for the theme")
 NOTE="$HOME_DIR/SETUP-NEXT.md"
 NOTE_TEXT=$(

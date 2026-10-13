@@ -1,0 +1,96 @@
+#!/usr/bin/python3 -I
+"""Start Steam, first giving newly installed games default launch options.
+
+Steam has no global launch options, so before Steam starts (and only if it
+isn't already running) this adds DEFAULT_OPTS to every installed game that
+has never been handled before. Each appid is recorded in STATE, so removing
+the options from a game in Steam sticks. Games with existing launch options
+are left alone. Any error just skips the patch; Steam always starts.
+"""
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+STEAM_BIN = "/usr/games/steam"
+STEAM_ROOT = Path.home() / ".steam" / "steam"
+DEFAULT_OPTS = "gamemoderun mangohud %command%"
+STATE = Path.home() / ".local/state/steam-launch/handled-appids"
+# Tools and runtimes that show up as installed apps but aren't games
+SKIP_NAME = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common Redistributables|SteamVR)\b")
+
+
+def steam_running():
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            try:
+                if os.readlink(f"/proc/{pid}/exe").endswith("/ubuntu12_32/steam"):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
+def installed_games():
+    text = (STEAM_ROOT / "steamapps/libraryfolders.vdf").read_text()
+    games = {}
+    for lib in re.findall(r'"path"\s+"([^"]+)"', text):
+        for acf in Path(lib, "steamapps").glob("appmanifest_*.acf"):
+            body = acf.read_text(errors="replace")
+            appid = re.search(r'"appid"\s+"(\d+)"', body)
+            name = re.search(r'"name"\s+"([^"]*)"', body)
+            if appid and name and not SKIP_NAME.match(name.group(1)):
+                games[appid.group(1)] = name.group(1)
+    return games
+
+
+def patch_localconfig(path, appids):
+    """Add DEFAULT_OPTS to apps in appids that have no LaunchOptions yet."""
+    lines = path.read_text(encoding="utf-8").split("\n")
+    t = "\t"
+    start = lines.index(t * 4 + '"apps"')
+    assert lines[start + 1] == t * 4 + "{"
+    end = lines.index(t * 4 + "}", start + 2)
+    opt_line = t * 6 + '"LaunchOptions"\t\t"' + DEFAULT_OPTS + '"'
+    seen, changed = set(), False
+    i = start + 2
+    while i < end:
+        m = re.fullmatch(r'\t{5}"(\d+)"', lines[i])
+        if m and m.group(1) in appids:
+            seen.add(m.group(1))
+            assert lines[i + 1] == t * 5 + "{"
+            close = lines.index(t * 5 + "}", i + 2)
+            if not any(l.startswith(t * 6 + '"LaunchOptions"') for l in lines[i + 2:close]):
+                lines.insert(i + 2, opt_line)
+                end += 1
+                changed = True
+        i += 1
+    for appid in sorted(appids - seen):
+        lines[end:end] = [t * 5 + f'"{appid}"', t * 5 + "{", opt_line, t * 5 + "}"]
+        end += 4
+        changed = True
+    if changed:
+        shutil.copy2(path, path.with_name(path.name + ".bak-steam-launch"))
+        path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def apply_defaults():
+    if steam_running():
+        return
+    handled = set(STATE.read_text().split()) if STATE.exists() else set()
+    new = set(installed_games()) - handled
+    if not new:
+        return
+    for cfg in (STEAM_ROOT / "userdata").glob("*/config/localconfig.vdf"):
+        patch_localconfig(cfg, new)
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text("\n".join(sorted(handled | new)) + "\n")
+
+
+if __name__ == "__main__":
+    try:
+        apply_defaults()
+    except Exception as e:
+        print(f"steam-launch: skipped default launch options: {e!r}", file=sys.stderr)
+    os.execv(STEAM_BIN, [STEAM_BIN, *sys.argv[1:]])
